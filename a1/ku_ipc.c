@@ -13,6 +13,8 @@ MODULE_LICENSE("GPL");
 #include "ku_ipc.h"
 
 struct q* get_queue(int key);
+int get_queue_size(int msqid);
+int get_num_of_msg(int msqid);
 
 spinlock_t s_lock;
 
@@ -40,7 +42,6 @@ void delay(int sec){
 }
 
 int is_exist_key(int *key){
-	//	printk("called isExistKey [%d]\n", *key);
 	struct queues *tmp = 0;
 	int ret=-1;
 
@@ -56,7 +57,6 @@ int is_exist_key(int *key){
 }
 
 int mk_queue(int *key){
-	//	printk("create Queue : %d", *key);
 	struct queues *new_queues = 0;
 	new_queues = (struct queues*)kmalloc(sizeof(struct queues), GFP_KERNEL);
 	new_queues->key = *key;
@@ -65,27 +65,7 @@ int mk_queue(int *key){
 	spin_lock(&s_lock);
 	list_add(&new_queues->list, &kern_queues.list);
 	spin_unlock(&s_lock);
-	/*
-	   struct queues *tmp=0;
-	   struct q *tmpQ=0;
-	   int i=0;
-	   list_for_each_entry(tmp, &kern_queues.list, list){
-	   printk("idx [%d], key [%d] \n", i, tmp->key);
-	   tmpQ=getQueue(tmp->key);
-	   i++;
-	   }
-
-	   struct q *tQ = 0;
-	   for(i=0; i<5; i++){
-	   tQ = (struct q*)kmalloc(sizeof(struct q), GFP_KERNEL);
-	   tQ->kern_buf.type = (long)i;
-	   list_add(&tQ->list, &tmpQ->list);
-	   }
-
-	   list_for_each_entry(tQ, &tmpQ->list, list){
-	   printk("%ld",tQ->kern_buf.type);
-	   }
-	 */
+	
 	return new_queues->key;
 }
 
@@ -114,19 +94,16 @@ int rm_queue(int *msqid){
 
 struct q* get_queue(int key){
 	int i=0;
-	int ret = 0;
 	struct queues *tmp = 0;
 	struct q *retQ = 0;
-	printk("getQueue : %d", key);
 	
 	spin_lock(&s_lock);
 	list_for_each_entry(tmp, &kern_queues.list, list){
 		if(tmp->key == key){
 			retQ = &tmp->kern_q;
-			printk("idx [%d], key[%d] \n", i, tmp->key);
 		}
 		i++;
-	}
+	}	
 	spin_unlock(&s_lock);
 
 	return retQ;
@@ -135,21 +112,63 @@ struct q* get_queue(int key){
 int is_full_queue(int *msqid){
 	int ret=0;
 	struct q *tmp = get_queue(*msqid);
-	printk("sizeof(queue) %d", sizeof(*tmp));
-	if(get_queue_size(*msqid) == KUIPC_MAXVOL)
+	if(get_queue_size(*msqid) >= KUIPC_MAXVOL || get_num_of_msg(*msqid) == KUIPC_MAXMSG)
 		ret = 1;
 	return ret;
 }
 
-int get_queue_size(int *msqid){
+int is_empty_queue(int *msqid){
+	int ret=0;
+	struct q *tmp = get_queue(*msqid);
+	printk("%d",*msqid);
+	if(get_num_of_msg(*msqid) == 0)
+		ret = 1;
+	return ret;
+}
+int get_queue_size(int msqid){
 	unsigned int ret;
 	struct q *tmp = 0;
-	struct q *target_q = get_queue(*msqid);
+	struct q *target_q = get_queue(msqid);
 
+	ret = 0;
+
+	spin_lock(&s_lock);
 	list_for_each_entry(tmp, &target_q->list, list){
-		//tmp->
+		ret += sizeof(*tmp);
 	}
+	spin_unlock(&s_lock);
+	printk("queue size : %d", ret);
+	return ret;
 }
+
+int get_num_of_msg(int msqid){
+	unsigned int ret;
+	struct q *tmp = 0;
+	struct q *target_q = get_queue(msqid);
+	unsigned int i;
+	ret = 0;
+	i = 0;
+
+	spin_lock(&s_lock);
+	list_for_each_entry(tmp, &target_q->list, list){
+		i++;	
+	}
+	ret = i;
+	spin_unlock(&s_lock);
+	printk("num of queue : %d", ret);
+	return ret;
+}
+
+int is_no_queue(int *msqid){
+	unsigned int ret;
+	struct q *target_q = get_queue(*msqid);
+	ret = 0;
+	if(target_q == NULL){
+		ret = 1;
+	}
+	return ret;
+}
+
 
 void displayQueue(int key){
 	printk("%d",key);
@@ -163,6 +182,7 @@ void displayQueue(int key){
 	}
 
 }
+
 
 static int ku_ipc_read(struct ipcbuf *ipc_buf){
 	int ret;
@@ -224,16 +244,16 @@ static int ku_ipc_write(struct ipcbuf *ipc_buf){
 	struct msgbuf *user_msgbuf;
 	printk("%ld",ipc_buf->msqid);
 	user_msgbuf = (struct msgbuf*)ipc_buf->msgp;
+	
 	written_q = get_queue(ipc_buf->msqid);
 	
 	tmp = (struct q*)kmalloc(sizeof(struct q), GFP_KERNEL);
 	printk("%s\n", user_msgbuf->text);
 	printk("%ld\n", user_msgbuf->type);
 
-	printk("write buf before : %s\n", user_msgbuf->text);
+	printk("write buf before : [%s]\n", user_msgbuf->text);
 	ret = copy_from_user(&tmp->kern_buf, user_msgbuf, ipc_buf->msgsz);
-	printk("write kern after : %s\n", tmp->kern_buf.text);
-	printk("%p", written_q);
+	printk("write kern after : [%s]\n", tmp->kern_buf.text);
 	spin_lock(&s_lock);
 	list_add_tail(&tmp->list, &written_q->list);
 	spin_unlock(&s_lock);
@@ -276,6 +296,12 @@ static long ku_ipc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			break;
 		case KU_IOCTL_IS_FULL_QUEUE:
 			ret = is_full_queue((int*)arg);
+			break;
+		case KU_IOCTL_IS_NO_QUEUE:
+			ret = is_no_queue((int*)arg);
+			break;
+		case KU_IOCTL_IS_EMPTY_QUEUE:
+			ret = is_empty_queue((int*)arg);
 			break;
 	
 	}

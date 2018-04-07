@@ -18,14 +18,16 @@ void main(int argc, char* argv[]){
 
 
 	//msqid = ku_msgget(atoi(argv[1]), IPC_CREAT);
-	msqid = 1;
-	// 	msqid = ku_msgget(1, IPC_EXCL);
+	key = 1;
+	//msqid = ku_msgget(key, IPC_EXCL);
+	msqid = ku_msgget(key, IPC_CREAT);
 	type = atol(argv[1]);
+	
 	printf("%ld\n", type);
+	printf("%d\n", msqid);
 	ret = ku_msgrcv(msqid, &msg_buf, KUIPC_MAXMSG, type, IPC_NOWAIT);
-	//ku_msgrcv(msqid, &msg_buf, KUIPC_MAXMSG, TYPE, IPC_NOERROR);
 	
 	printf("received msg : %s, type[%ld] \n", msg_buf.text, msg_buf.type);
-	printf("remove queue : %d", msqid);
+	printf("data length : %d\n", ret);
 //	ku_msgclose(msqid);
 }

@@ -55,7 +55,6 @@ int ku_msgsnd(int msqid, void *msgp, int msgsz, int msgflg){
 
 	dev = getDev();
 	msg_buf = (struct msgbuf*)msgp;
-
 	ipc_buf.msqid = msqid;
 	ipc_buf.msgp = msgp;
 	ipc_buf.msgsz = msgsz;
@@ -68,13 +67,12 @@ int ku_msgsnd(int msqid, void *msgp, int msgsz, int msgflg){
 		if(msgflg & IPC_NOWAIT){
 			return ret=-1;
 		} else {
-	//		while(isFullQueue);
+			while(ioctl(dev, KU_IOCTL_IS_FULL_QUEUE, &msqid) || ioctl(dev, KU_IOCTL_IS_NO_QUEUE));
 		}
 
 	}
-	
 	remainedByte = ioctl(dev, KU_IOCTL_SND, &ipc_buf);
-	
+	printf("remained Byte : %d\n", remainedByte);
 	return ret;
 }
 
@@ -82,17 +80,35 @@ int ku_msgrcv(int msqid, void *msgp, int msgsz, long msgtyp, int msgflg){
 	int dev;
 	int ret=0;
 	int remainedByte;
+	int isEmptyQueue;
 	struct ipcbuf ipc_buf;
 
+	dev = getDev();
 	ipc_buf.msqid = msqid;
 	ipc_buf.msgp = msgp;
 	ipc_buf.msgsz = msgsz;
 	ipc_buf.msgtyp = msgtyp;
 	ipc_buf.msgflg = msgflg;
+	
+	printf("msqid %d\n", msqid);
+	printf("dev %d\n", dev);
 
-	dev = getDev();
+	isEmptyQueue = ioctl(dev, KU_IOCTL_IS_EMPTY_QUEUE, &msqid);
+	printf("isEmptyQueue %d\n", isEmptyQueue);
+	
+	if(isEmptyQueue){
+		if(msgflg & IPC_NOWAIT){
+			return ret=-1;
+		} else {
+			while(ioctl(dev, KU_IOCTL_IS_EMPTY_QUEUE, &msqid) || ioctl(dev, KU_IOCTL_IS_NO_QUEUE));
+		}
+
+	}
+	/* to do msg_noerror */
+	
 	remainedByte = ioctl(dev, KU_IOCTL_RCV, &ipc_buf);
-
+	printf("ku_msgrcv: %s\n", ((struct msgbuf*)ipc_buf.msgp)->text);
+	ret = strlen(((struct msgbuf*)ipc_buf.msgp)->text);
 	close(dev);
 	return ret;
 }

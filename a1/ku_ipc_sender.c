@@ -17,24 +17,27 @@ void main(int argc, char* argv[]){
 	} else{
 		for(i=2; i<argc; i++){
 			strncat(msg,argv[i],strlen(argv[i]));
-			strncat(msg," ",1);
+			if(i != argc-1)
+				strncat(msg," ",1);
 		}
 	}
 	
-	key = 1;
+	//key = 10;
 	//msqid = ku_msgget(atoi(argv[1]), IPC_CREAT);
 	//msqid = ku_msgget(key, IPC_EXCL);
-	msqid = ku_msgget(key, IPC_CREAT);
+	msqid = ku_msgget(1, IPC_CREAT);
+	printf("%d\n",msqid);
+	
 	if(msqid == -1){
 		printf("already exist key : %d", key);
 		return;
 	}
 	printf("msqid : %d\n", msqid);
 	strncpy(msg_buf.text, msg, sizeof(msg));
-//	msg_buf.type = TYPE;
 	msg_buf.type = atoi(argv[1]);
 
-	if(ku_msgsnd(msqid, &msg_buf, sizeof(msg_buf), IPC_NOWAIT) == 0){
+	//if(ku_msgsnd(msqid, &msg_buf, sizeof(msg_buf), IPC_NOWAIT) == 0){
+	if(ku_msgsnd(msqid, &msg_buf, sizeof(msg_buf), 0) == 0){
 		printf("success sned msg : %s\n", msg);
 	} else {
 		printf("failed to send\n");
