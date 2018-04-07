@@ -5,6 +5,7 @@
 #define IOCTL_NUM4 IOCTL_START_NUM+4
 #define IOCTL_NUM5 IOCTL_START_NUM+5
 #define IOCTL_NUM6 IOCTL_START_NUM+6
+#define IOCTL_NUM7 IOCTL_START_NUM+7
 
 #define SIMPLE_IOCTL_NUM 'z'
 #define KU_IOCTL_SND 		_IOWR(SIMPLE_IOCTL_NUM, IOCTL_NUM1, unsigned long *)
@@ -13,6 +14,7 @@
 #define KU_IOCTL_MSGCLOSE 	_IOWR(SIMPLE_IOCTL_NUM, IOCTL_NUM4, unsigned long *)
 #define KU_IOCTL_IS_EXIST_KEY	_IOWR(SIMPLE_IOCTL_NUM, IOCTL_NUM5, unsigned long *)
 #define KU_IOCTL_CREATE_QUEUE 	_IOWR(SIMPLE_IOCTL_NUM, IOCTL_NUM6, unsigned long *)
+#define KU_IOCTL_IS_FULL_QUEUE 	_IOWR(SIMPLE_IOCTL_NUM, IOCTL_NUM7, unsigned long *)
 
 
 #define IPC_CREAT 	0x1000
@@ -22,7 +24,7 @@
 
 #define KU_IPC_EXCL	0x2000
 
-#define KUIPC_MAXMSG 	128	/* maximum number of massages pre queue */
+#define KUIPC_MAXMSG 	128	/* maximum number of massages per queue */
 #define KUIPC_MAXVOL 	2048	/* maximum data volume allowed for each queue */
 
 #define DEV_NAME "ku_ipc_dev"
@@ -39,9 +41,3 @@ struct ipcbuf{
 	long msgtyp;
 	int msgflg;
 };
-/*
-int ku_msgget(int key, int msgflg);
-int ku_msgclose(int msqid);
-int ku_msgsnd(int msqid, void *msgp, int msgsz, int msgflg);
-int ku_msgrcv(int msqid, void *msgp, int msgsz, long msgtyp, int msgflg);
-*/
