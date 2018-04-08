@@ -29,25 +29,14 @@ struct queues{
 	int key;
 };
 
-
 struct queues kern_queues;
-
-void delay(int sec){
-	int i, j;
-	for(j=0; j<sec; j++){
-		for(i=0; i<1000; i++){
-			udelay(1000);
-		}
-	}
-}
 
 int is_exist_key(int *key){
 	struct queues *tmp = 0;
-	int ret=-1;
+	int ret=0;
 
 	spin_lock(&s_lock);
 	list_for_each_entry(tmp, &kern_queues.list, list){
-		printk("is exist key [%d]\n", tmp->key);
 		if(tmp->key == *key)
 			ret = tmp->key;
 	}
@@ -59,7 +48,9 @@ int is_exist_key(int *key){
 int mk_queue(int *key){
 	struct queues *new_queues = 0;
 	new_queues = (struct queues*)kmalloc(sizeof(struct queues), GFP_KERNEL);
+
 	new_queues->key = *key;
+
 	INIT_LIST_HEAD(&new_queues->kern_q.list);
 	
 	spin_lock(&s_lock);
@@ -70,7 +61,6 @@ int mk_queue(int *key){
 }
 
 int rm_queue(int *msqid){
-	printk("remove Queue called : %d", *msqid);
 	struct queues *tmp = 0;
 	struct list_head *pos = 0;
 	struct list_head *next_q = 0;
@@ -80,7 +70,6 @@ int rm_queue(int *msqid){
 	list_for_each_safe(pos, next_q, &kern_queues.list){
 		tmp = list_entry(pos, struct queues, list);
 		if(tmp->key == *msqid){
-			printk("removed queue key : %d",tmp->key);
 			list_del(pos);
 			kfree(tmp);
 			ret = 0;
@@ -111,7 +100,7 @@ struct q* get_queue(int key){
 
 int is_full_queue(int *msqid){
 	int ret=0;
-	struct q *tmp = get_queue(*msqid);
+
 	if(get_queue_size(*msqid) >= KUIPC_MAXVOL || get_num_of_msg(*msqid) == KUIPC_MAXMSG)
 		ret = 1;
 	return ret;
@@ -119,8 +108,7 @@ int is_full_queue(int *msqid){
 
 int is_empty_queue(int *msqid){
 	int ret=0;
-	struct q *tmp = get_queue(*msqid);
-	printk("%d",*msqid);
+	
 	if(get_num_of_msg(*msqid) == 0)
 		ret = 1;
 	return ret;
@@ -137,7 +125,6 @@ int get_queue_size(int msqid){
 		ret += sizeof(*tmp);
 	}
 	spin_unlock(&s_lock);
-	printk("queue size : %d", ret);
 	return ret;
 }
 
@@ -155,7 +142,6 @@ int get_num_of_msg(int msqid){
 	}
 	ret = i;
 	spin_unlock(&s_lock);
-	printk("num of queue : %d", ret);
 	return ret;
 }
 
@@ -169,21 +155,6 @@ int is_no_queue(int *msqid){
 	return ret;
 }
 
-
-void displayQueue(int key){
-	printk("%d",key);
-	int i=0;
-	struct q *tmp = 0;
-	struct q *displayedQ = get_queue(key);
-
-	list_for_each_entry(tmp, &displayedQ->list, list){
-		printk("pos[%d], type[%ld], text[%s] \n", i, tmp->kern_buf.type, tmp->kern_buf.text);
-		i++;
-	}
-
-}
-
-
 static int ku_ipc_read(struct ipcbuf *ipc_buf){
 	int ret;
 	unsigned int i = 0;
@@ -192,19 +163,19 @@ static int ku_ipc_read(struct ipcbuf *ipc_buf){
 	struct list_head *q = 0;
 	struct q *read_q = 0;
 	long type = 0L;
+	
+	if(is_no_queue(&ipc_buf->msqid))
+		return -1;
+	
 	read_q = get_queue(ipc_buf->msqid);
-
-	//delay(1);
-
+	
 	spin_lock(&s_lock);
 	list_for_each_safe(pos, q, &read_q->list){
 		tmp = list_entry(pos, struct q, list);
 		type = ipc_buf->msgtyp;
 		if(type == 0) {
 			if(i==0){
-				ret = copy_to_user(ipc_buf->msgp, &tmp->kern_buf, sizeof(tmp->kern_buf));
-				printk("read kern : %s\n", tmp->kern_buf.text);
-				printk("read buf : %s\n", ((struct msgbuf*)ipc_buf->msgp)->text);
+				ret = copy_to_user(ipc_buf->msgp, &tmp->kern_buf, ipc_buf->msgsz);
 				list_del(pos);
 				kfree(tmp);
 			}
@@ -212,7 +183,7 @@ static int ku_ipc_read(struct ipcbuf *ipc_buf){
 		} else if(type>0){
 			if(type == tmp->kern_buf.type){
 				if(i==0){
-					ret = copy_to_user(ipc_buf->msgp, &tmp->kern_buf, sizeof(tmp->kern_buf));
+					ret = copy_to_user(ipc_buf->msgp, &tmp->kern_buf, ipc_buf->msgsz);
 					list_del(pos);
 					kfree(tmp);
 				}
@@ -221,7 +192,7 @@ static int ku_ipc_read(struct ipcbuf *ipc_buf){
 		} else if(type<0){
 			if(~type+1 >= tmp->kern_buf.type){
 				if(i==0){
-					ret = copy_to_user(ipc_buf->msgp, &tmp->kern_buf, sizeof(tmp->kern_buf));
+					ret = copy_to_user(ipc_buf->msgp, &tmp->kern_buf, ipc_buf->msgsz);
 					list_del(pos);
 					kfree(tmp);
 				}
@@ -232,7 +203,6 @@ static int ku_ipc_read(struct ipcbuf *ipc_buf){
 	}
 	spin_unlock(&s_lock);
 
-	displayQueue(ipc_buf->msqid);
 
 	return ret;
 }
@@ -242,31 +212,28 @@ static int ku_ipc_write(struct ipcbuf *ipc_buf){
 	struct q *tmp = 0;
 	struct q *written_q = 0;
 	struct msgbuf *user_msgbuf;
-	printk("%ld",ipc_buf->msqid);
 	user_msgbuf = (struct msgbuf*)ipc_buf->msgp;
 	
+	if(is_no_queue(&ipc_buf->msqid))
+		return -1;
+
 	written_q = get_queue(ipc_buf->msqid);
 	
 	tmp = (struct q*)kmalloc(sizeof(struct q), GFP_KERNEL);
-	printk("%s\n", user_msgbuf->text);
-	printk("%ld\n", user_msgbuf->type);
 
-	printk("write buf before : [%s]\n", user_msgbuf->text);
 	ret = copy_from_user(&tmp->kern_buf, user_msgbuf, ipc_buf->msgsz);
-	printk("write kern after : [%s]\n", tmp->kern_buf.text);
 	spin_lock(&s_lock);
 	list_add_tail(&tmp->list, &written_q->list);
 	spin_unlock(&s_lock);
 
-	//displayQueue(ipc_buf->msqid);
 	return ret;
 }
 
 static long ku_ipc_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
 	struct msgbuf *user_buf;
-	int ret;
+	long ret;
 
-	ret = 0;
+	ret = 0L;
 	user_buf = (struct msgbuf*)arg;
 
 	switch(cmd){
@@ -274,7 +241,6 @@ static long ku_ipc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			{
 				struct ipcbuf *ipc_buf;
 				ipc_buf = (struct ipcbuf*)arg;
-				printk("ioctl : %ld",ipc_buf->msgtyp);
 				ret = ku_ipc_read(ipc_buf);
 				break;
 			}

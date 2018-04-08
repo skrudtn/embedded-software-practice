@@ -20,21 +20,21 @@
 #define KU_IOCTL_IS_NO_QUEUE 	_IOWR(SIMPLE_IOCTL_NUM, IOCTL_NUM8, unsigned long *)
 #define KU_IOCTL_IS_EMPTY_QUEUE _IOWR(SIMPLE_IOCTL_NUM, IOCTL_NUM9, unsigned long *)
 
-#define IPC_FLAG	0x1010
+#define IPC_FLAG	1
 #define IPC_CREAT 	IPC_FLAG<<1
 #define IPC_EXCL 	IPC_FLAG<<2
 #define IPC_NOWAIT 	IPC_FLAG<<3
 #define MSG_NOERROR 	IPC_FLAG<<4
 
 
-#define KUIPC_MAXMSG 	3	/* maximum number of massages per queue */
+#define KUIPC_MAXMSG 	10	/* maximum number of massages per queue */
 #define KUIPC_MAXVOL 	1000	/* maximum data volume allowed for each queue */
 
 #define DEV_NAME "ku_ipc_dev"
 
 struct msgbuf{
 	long type;		/* Type of message */
-	char text[KUIPC_MAXMSG];/* Message text*/
+	char text[100];		/* Message text*/
 };
 
 struct ipcbuf{
