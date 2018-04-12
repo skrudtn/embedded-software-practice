@@ -1,4 +1,4 @@
-# embedded-software-practice
+﻿# embedded-software-practice
 건국대 임베디드 소프트웨어 실습 코드입니다.
 
 ## Challenges
@@ -6,6 +6,8 @@
 ### 1. 심볼 export 응용
 
 ### 2. LED 3개를 순차적으로 깜빡이는 커널 모듈 코드 작성
+
+### 3. 인체 탐지센서를 이용하여 인체 탐지시 LED를 2초간 작동시키는 커널 모듈 코드 작성
 
 ## Assignments
 
