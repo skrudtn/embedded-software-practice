@@ -14,7 +14,7 @@ int main(){
 
 	for(;;){
 	ku_pir_read(fd, data);
-	printf("fd %d, time : %ld, ",fd,data->timestamp);
+	printf("ts : %ld, flag:",data->timestamp);
 	if(data->rf_flag == '1')
 		printf("FALLING!!\n");
 	else

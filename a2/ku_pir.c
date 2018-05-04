@@ -11,6 +11,8 @@
 #include <linux/uaccess.h>
 #include <linux/spinlock.h>
 #include <linux/wait.h>
+#include <linux/rculist.h>
+
 
 #include "ku_pir.h"
 
@@ -39,22 +41,21 @@ struct queues{
 	struct list_head list;
 	struct q kern_q;
 	int fd;
-	int cnt;
 };
 
 struct queues kern_queues;
 
 struct q* get_queue(int fd){
-	struct queues *tmp = 0;
+	struct queues *tmp_queues = 0;
 	struct q *ret_q = 0;
 
 	/* locking */
-	//rcu_read_lock();
-	list_for_each_entry(tmp, &kern_queues.list, list){
-		if(tmp->fd == fd)
-			ret_q = &tmp->kern_q;
+	rcu_read_lock();
+	list_for_each_entry_rcu(tmp_queues, &kern_queues.list, list){
+		if(tmp_queues->fd == fd)
+			ret_q = &tmp_queues->kern_q;
 	}
-	//rcu_read_unlock();
+	rcu_read_unlock();
 	/* unlocking */
 
 	return ret_q;
@@ -64,14 +65,16 @@ int mk_queue(void){
 	struct queues *new_queues =0;
 	new_queues = (struct queues*)kmalloc(sizeof(struct queues), GFP_KERNEL);
 	new_queues->fd = kern_fd++;
-	new_queues->cnt = 0;
 	
 	INIT_LIST_HEAD(&new_queues->kern_q.list);
 
 	/* locking */
-	list_add(&new_queues->list, &kern_queues.list);
+	spin_lock(&my_lock); /* spin lock for multi reader process */
+	list_add_rcu(&new_queues->list, &kern_queues.list);
+	spin_unlock(&my_lock);
 	/* unlocking */
-	
+	synchronize_rcu();	
+
 	return new_queues->fd;
 }
 
@@ -90,10 +93,11 @@ int get_num_of_data(int fd){
 	struct q *target_q = get_queue(fd);
 
 	/* locking */
+	spin_lock(&my_lock);
 	list_for_each_entry(tmp, &target_q->list, list){
 		ret += 1;
 	}
-
+	spin_unlock(&my_lock);
 	/* unlocking */
 	return ret;
 }
@@ -106,16 +110,45 @@ void poll_q(int fd){
 	
 	target_q = get_queue(fd);
 
-	printk("poll_q");
 	/*locking */
+	spin_lock(&my_lock);
 	list_for_each_safe(pos, q, &target_q->list){
 		tmp = list_entry(pos, struct q, list);
-
-		list_del(pos);
+		printk("poll_q %ld, %c", tmp->kern_data.timestamp, tmp->kern_data.rf_flag);
+		list_del(pos); 
+		/* q is refered in get_numb_of_data func */
+		
 		kfree(tmp);
 		break;
 	}
-	/*unlocking */
+	spin_unlock(&my_lock);
+	/* unlocking */
+}
+
+int flush_queue(int fd){
+	int ret;
+	struct q *target_q = 0;
+	struct q *tmp = 0;
+	struct list_head *pos = 0;
+	struct list_head *q = 0;
+	
+	ret = 0;
+	target_q = get_queue(fd);
+	/* locking */
+	spin_lock(&my_lock);
+	list_for_each_safe(pos, q, &target_q->list){
+		tmp = list_entry(pos, struct q, list);
+		list_del(pos);
+		kfree(tmp);
+	}
+	spin_unlock(&my_lock);
+	/* unlocking */
+	return ret;
+}
+
+int rm_queue(int fd){
+	printk("rm_queue %d", fd);
+	return 0;
 }
 
 int insert_one(struct comb_data *cd){
@@ -130,17 +163,19 @@ int insert_one(struct comb_data *cd){
 	ret = copy_from_user(&(tmp_q->kern_data), cd->data, sizeof(struct ku_pir_data));
 	
 	printk("insert one %ld, %c", tmp_q->kern_data.timestamp, tmp_q->kern_data.rf_flag);
-	/* locking */
-
 	/* check full queue*/
 	if(is_full_queue(cd->fd)){
 		poll_q(cd->fd);
 	}
 	
-	list_add_tail(&tmp_q->list, &written_q->list);
 
+	/* locking */
+	spin_lock(&my_lock);
+	list_add_tail(&tmp_q->list, &written_q->list);
+	spin_unlock(&my_lock);
 	/* unlocking */
 
+	wake_up_interruptible(&my_wq);
 	return ret;
 }
 
@@ -149,7 +184,8 @@ void insert_all(long unsigned int ts, char rf_flag){
 	struct q *new_q = 0;
 
 	/* locking */
-	list_for_each_entry(tmp_queues, &kern_queues.list, list){
+	rcu_read_lock();
+	list_for_each_entry_rcu(tmp_queues, &kern_queues.list, list){
 		new_q = (struct q*)kmalloc(sizeof(struct q), GFP_KERNEL);
 		new_q->kern_data.timestamp = ts;
 		new_q->kern_data.rf_flag = rf_flag;
@@ -158,14 +194,15 @@ void insert_all(long unsigned int ts, char rf_flag){
 		if(is_full_queue(tmp_queues->fd)){
 			poll_q(tmp_queues->fd);
 		}
-		tmp_queues->cnt += 1;
 
-		printk("fd %d cnt : %d\n", tmp_queues->fd,tmp_queues->cnt);
-		printk("rf_flag %c\n", rf_flag);
-		printk("jiffies %ld\n", ts);
 
-		list_add(&new_q->list, &tmp_queues->kern_q.list);
+		spin_lock(&my_lock);
+		list_add_rcu(&new_q->list, &tmp_queues->kern_q.list);
+		printk("i, fd:%d, ts:%ld ", tmp_queues->fd, ts);
+		spin_unlock(&my_lock);
 	}
+	rcu_read_unlock();
+
 	wake_up_interruptible(&my_wq);
 
 	/* unlocking */
@@ -177,52 +214,26 @@ static int ku_pir_read(struct comb_data *cd){
 	struct list_head *pos = 0;
 	struct list_head *q = 0;
 	int ret;
-
+	
 	read_q = get_queue(cd->fd);
-	printk("fd : %d", cd->fd);
-	printk("count : %d", get_num_of_data(cd->fd));
-	wait_event_interruptible_exclusive(my_wq, get_num_of_data(cd->fd)>0);
-
+	printk("fd:%d waiting... cnt:%d",cd->fd,get_num_of_data(cd->fd));
+	wait_event_interruptible(my_wq, get_num_of_data(cd->fd)>0);
+	printk("fd:%d wake up!!! cnt:%d",cd->fd,get_num_of_data(cd->fd));
 	/* locking */
-//	spin_lock(&my_lock);
+	spin_lock(&my_lock);
 	list_for_each_safe(pos, q, &read_q->list){
 		tmp = list_entry(pos, struct q, list);
-		printk("read : %ld, %c", tmp->kern_data.timestamp, tmp->kern_data.rf_flag);
+		printk("r, fd:%d, ts:%ld",cd->fd, tmp->kern_data.timestamp);
 		ret = copy_to_user(cd->data, &(tmp->kern_data), sizeof(struct ku_pir_data));
 		list_del(pos);
 		kfree(tmp);
 		break;
 	}
-//	spin_unlock(&my_lock);
+	spin_unlock(&my_lock);
 
 	/* unlocking */
 	return ret;
 
-}
-
-
-int flush_queue(int fd){
-	int ret;
-	struct q *target_q = 0;
-	struct q *tmp = 0;
-	struct list_head *pos = 0;
-	struct list_head *q = 0;
-	
-	ret = 0;
-	target_q = get_queue(fd);
-	/* locking */	
-	list_for_each_safe(pos, q, &target_q->list){
-		tmp = list_entry(pos, struct q, list);
-		list_del(pos);
-		kfree(tmp);
-	}
-	/* unlocking */
-	return ret;
-}
-
-int rm_queue(int fd){
-	printk("rm_queue %d", fd);
-	return 0;
 }
 
 static int ku_pir_open(struct inode *inode, struct file* file){
@@ -250,7 +261,6 @@ static long ku_pir_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			{
 				struct comb_data *cd;
 				cd = (struct comb_data*)arg;
-
 				ret = ku_pir_read(cd);
 				break;
 			}
@@ -279,20 +289,16 @@ struct file_operations ku_pir_fops =
 
 
 static irqreturn_t ku_pir_isr(int irq, void* dev_id){
-	/* irq */
 	int ret;
 	char rf_flag;
 	long unsigned int timestamp;
-
-	printk("detect!");
+	
 	ret = 0;
 	timestamp = jiffies;
-	if(gpio_get_value(KUPIR_SENSOR) == 1)	 /* rising */
+	if(gpio_get_value(KUPIR_SENSOR) == 1)	 /* 1 : rising */
 		rf_flag = '0';
 	else
 		rf_flag = '1';
-
-
 
 	insert_all(timestamp, rf_flag);
 
