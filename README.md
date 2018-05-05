@@ -12,3 +12,6 @@
 ## Assignments
 
 ### 1. Process 간 통신을 위한 큐를 생성하는 커널 모듈 코드 작성및 응용 라이브러리 작성
+
+### 2. PIR 센서를 이용한 공간에 사람이 있는 시간을 모니터링 하는 Character Device 및 Library 작성
+
