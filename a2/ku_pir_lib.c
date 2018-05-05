@@ -48,7 +48,6 @@ void ku_pir_flush(int fd){
 	int dev;
 	
 	dev = get_dev();
-	printf("flush %d\n", fd);
 	ioctl(dev, KU_IOCTL_FLUSH, &fd);
 
 	close(dev);
@@ -66,7 +65,6 @@ int ku_pir_insertData(int fd, long unsigned int ts, char rf_flag){
 	cd.data->rf_flag = rf_flag;
 	cd.fd=fd;
 
-	printf("fd: %d, ts: %ld, flag : %c\n", cd.fd, cd.data->timestamp, cd.data->rf_flag);
 	ret = ioctl(dev, KU_IOCTL_INSERT, &cd); 
 
 	close(dev);

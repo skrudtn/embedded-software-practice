@@ -25,7 +25,7 @@ int get_num_of_data(int fd);
 void poll_q(int fd);
 int flush_queue(int fd);
 int rm_queue(int fd);
-
+int is_no_queue(int fd);
 
 static int irq_num;
 static int kern_fd;
@@ -90,7 +90,12 @@ int is_full_queue(int fd){
 int get_num_of_data(int fd){
 	int ret = 0;
 	struct q *tmp = 0;
-	struct q *target_q = get_queue(fd);
+	struct q *target_q =0;
+	
+	if(is_no_queue(fd)){
+		return -1;
+	}
+	target_q = get_queue(fd);
 
 	/* locking */
 	spin_lock(&my_lock);
@@ -114,9 +119,8 @@ void poll_q(int fd){
 	spin_lock(&my_lock);
 	list_for_each_safe(pos, q, &target_q->list){
 		tmp = list_entry(pos, struct q, list);
-		printk("poll_q %ld, %c", tmp->kern_data.timestamp, tmp->kern_data.rf_flag);
 		list_del(pos); 
-		/* q is refered in get_numb_of_data func */
+		/* q is refered in get_num_of_data func */
 		
 		kfree(tmp);
 		break;
@@ -132,7 +136,10 @@ int flush_queue(int fd){
 	struct list_head *pos = 0;
 	struct list_head *q = 0;
 	
-	ret = 0;
+	ret = -1;
+	if(is_no_queue(fd)){
+		return ret;
+	}
 	target_q = get_queue(fd);
 	/* locking */
 	spin_lock(&my_lock);
@@ -140,6 +147,7 @@ int flush_queue(int fd){
 		tmp = list_entry(pos, struct q, list);
 		list_del(pos);
 		kfree(tmp);
+		ret = 0;
 	}
 	spin_unlock(&my_lock);
 	/* unlocking */
@@ -147,8 +155,43 @@ int flush_queue(int fd){
 }
 
 int rm_queue(int fd){
-	printk("rm_queue %d", fd);
-	return 0;
+	struct queues *tmp = 0;
+	struct list_head *pos;
+	int ret;
+
+	ret = -1;
+	if(is_no_queue(fd)){
+		printk("rm:%d, is no queue", fd);
+		return ret;
+	}
+	flush_queue(fd);
+	/* locking */
+	spin_lock(&my_lock);
+	list_for_each_entry_rcu(tmp, &kern_queues.list, list){
+		if(tmp->fd == fd){
+			list_del_rcu(&tmp->list);
+			kfree(tmp);
+			break;
+		}
+	}
+	synchronize_rcu();
+	if(is_no_queue(fd))
+		ret = 0;
+	spin_unlock(&my_lock);
+	/* unlocking */
+	return ret;
+}
+
+int is_no_queue(int fd){
+	int ret;
+	struct q *target_q = 0;
+	target_q = get_queue(fd);
+	ret = 0;
+	if(target_q == NULL){
+		ret = 1;
+	}
+	
+	return ret;
 }
 
 int insert_one(struct comb_data *cd){
@@ -156,6 +199,11 @@ int insert_one(struct comb_data *cd){
 	struct q *tmp_q = 0;
 	struct q *written_q = 0;
 	
+	if(is_no_queue(cd->fd)){
+		printk("insert one %d, is no queue",cd->fd);
+		return -1;
+	}
+
 	written_q = get_queue(cd->fd);
 
 	tmp_q = (struct q*)kmalloc(sizeof(struct q), GFP_KERNEL);
@@ -168,7 +216,6 @@ int insert_one(struct comb_data *cd){
 		poll_q(cd->fd);
 	}
 	
-
 	/* locking */
 	spin_lock(&my_lock);
 	list_add_tail(&tmp_q->list, &written_q->list);
@@ -198,7 +245,7 @@ void insert_all(long unsigned int ts, char rf_flag){
 
 		spin_lock(&my_lock);
 		list_add_rcu(&new_q->list, &tmp_queues->kern_q.list);
-		printk("i, fd:%d, ts:%ld ", tmp_queues->fd, ts);
+	//	printk("i, fd:%d, ts:%ld ", tmp_queues->fd, ts);
 		spin_unlock(&my_lock);
 	}
 	rcu_read_unlock();
@@ -215,15 +262,21 @@ static int ku_pir_read(struct comb_data *cd){
 	struct list_head *q = 0;
 	int ret;
 	
-	read_q = get_queue(cd->fd);
+	
 	printk("fd:%d waiting... cnt:%d",cd->fd,get_num_of_data(cd->fd));
-	wait_event_interruptible(my_wq, get_num_of_data(cd->fd)>0);
+	wait_event_interruptible(my_wq, (get_num_of_data(cd->fd)>0) || (get_num_of_data(cd->fd)==-1));
 	printk("fd:%d wake up!!! cnt:%d",cd->fd,get_num_of_data(cd->fd));
+	
+	if(is_no_queue(cd->fd)){
+		printk("read fd :%d, is no queue",cd->fd);
+		return -1;
+	}
+	read_q = get_queue(cd->fd);
 	/* locking */
 	spin_lock(&my_lock);
 	list_for_each_safe(pos, q, &read_q->list){
 		tmp = list_entry(pos, struct q, list);
-		printk("r, fd:%d, ts:%ld",cd->fd, tmp->kern_data.timestamp);
+	//	printk("r, fd:%d, ts:%ld",cd->fd, tmp->kern_data.timestamp);
 		ret = copy_to_user(cd->data, &(tmp->kern_data), sizeof(struct ku_pir_data));
 		list_del(pos);
 		kfree(tmp);
@@ -314,6 +367,7 @@ static int __init ku_pir_init(void){
 	int ret;
 
 	printk("Init Module\n");
+	
 	/*allocate character device*/
 	alloc_chrdev_region(&dev_num, 0, 1, DEV_NAME);
 	cd_cdev = cdev_alloc();

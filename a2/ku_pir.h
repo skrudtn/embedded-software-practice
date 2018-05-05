@@ -1,4 +1,4 @@
-#define KUPIR_MAX_MSG 100
+#define KUPIR_MAX_MSG 10
 #define KUPIR_SENSOR 17
 #define DEV_NAME "ku_pir_dev"
 
