@@ -210,7 +210,6 @@ int insert_one(struct comb_data *cd){
 	
 	ret = copy_from_user(&(tmp_q->kern_data), cd->data, sizeof(struct ku_pir_data));
 	
-	printk("insert one %ld, %c", tmp_q->kern_data.timestamp, tmp_q->kern_data.rf_flag);
 	/* check full queue*/
 	if(is_full_queue(cd->fd)){
 		poll_q(cd->fd);
@@ -245,7 +244,6 @@ void insert_all(long unsigned int ts, char rf_flag){
 
 		spin_lock(&my_lock);
 		list_add_rcu(&new_q->list, &tmp_queues->kern_q.list);
-	//	printk("i, fd:%d, ts:%ld ", tmp_queues->fd, ts);
 		spin_unlock(&my_lock);
 	}
 	rcu_read_unlock();
@@ -263,9 +261,7 @@ static int ku_pir_read(struct comb_data *cd){
 	int ret;
 	
 	
-	printk("fd:%d waiting... cnt:%d",cd->fd,get_num_of_data(cd->fd));
 	wait_event_interruptible(my_wq, (get_num_of_data(cd->fd)>0) || (get_num_of_data(cd->fd)==-1));
-	printk("fd:%d wake up!!! cnt:%d",cd->fd,get_num_of_data(cd->fd));
 	
 	if(is_no_queue(cd->fd)){
 		printk("read fd :%d, is no queue",cd->fd);
@@ -276,7 +272,6 @@ static int ku_pir_read(struct comb_data *cd){
 	spin_lock(&my_lock);
 	list_for_each_safe(pos, q, &read_q->list){
 		tmp = list_entry(pos, struct q, list);
-	//	printk("r, fd:%d, ts:%ld",cd->fd, tmp->kern_data.timestamp);
 		ret = copy_to_user(cd->data, &(tmp->kern_data), sizeof(struct ku_pir_data));
 		list_del(pos);
 		kfree(tmp);
