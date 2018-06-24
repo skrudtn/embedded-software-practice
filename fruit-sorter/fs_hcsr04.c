@@ -8,86 +8,118 @@
 #include <linux/interrupt.h>
 #include <linux/cdev.h>
 #include <asm/delay.h>
+#include <linux/uaccess.h>
 
-#include "config.h"
-#include "common.h"
+#include "fs_hcsr04.h"
 
-int isEntered;
 long dist;
-EXPORT_SYMBOL(dist);
+
+MODULE_LICENSE("GPL");
+
 static int irq_num;
 static struct timer_list my_timer;
 static struct timeval after, before;
 
-static void my_timer_func(unsigned long data){
-	my_timer.expires = jiffies + (1*HZ);
-	hcsr04_setup();
-	add_timer(&my_timer);
+void my_timer_callback(unsigned long data){
+    start_sonic();
+    mod_timer(&my_timer, jiffies + msecs_to_jiffies(20));
 }
 
-void hcsr04_setup(void){
-	gpio_set_value(HCSR04_TRIGGER, 1);
-	udelay(10);
-	gpio_set_value(HCSR04_TRIGGER, 0);
+void start_sonic(void){
+    gpio_set_value(TRIGGER, 1);
+    udelay(10);
+    gpio_set_value(TRIGGER, 0);
 }
 
-long get_distance(void){
-	return dist;
-}
-EXPORT_SYMBOL(get_distance);
+static irqreturn_t sonic_isr(int irq, void *dev_id){
+    if(gpio_get_value(ECHO) == 1){
+        do_gettimeofday(&before);
+    }
 
-static irqreturn_t hcsr04_isr(int irq, void *dev_id){
-	long distance;
-	if(gpio_get_value(HCSR04_ECHO) == 1){
-		do_gettimeofday(&before);
+    if(gpio_get_value(ECHO) == 0){
+        do_gettimeofday(&after);
+	dist=(after.tv_usec - before.tv_usec)/58;
+    }
+
+    return IRQ_HANDLED;
+}
+
+static int sonic_open(struct inode *inode, struct file* file){
+	printk("hscr open\n");
+	return 0;
+}
+
+static int sonic_release(struct inode *inode, struct file* file){
+	printk("hscr close\n");
+	return 0;
+}
+
+struct hcsr_buf{
+	long dist;
+};
+
+static int sonic_read(struct file *file, char *buf, size_t len, loff_t *lof){
+	printk("read: %d", dist);
+	struct hcsr_buf h;
+	h.dist = dist;
+	if(copy_to_user(buf, &h, len)){
+		return -EFAULT;
 	}
-
-	if(gpio_get_value(HCSR04_ECHO) == 0){
-		do_gettimeofday(&after);
-		distance = (after.tv_usec - before.tv_usec)/58;
-		dist= distance;
-		printk("distance %ld cm\n\n", distance);
-		if(distance < 3){
-			isEntered = 1;
-			printk("hcsr04 isEnterd\n");
-		}
-		else
-			isEntered = 0;
-	}
-
-	return IRQ_HANDLED;
+	return 0;
 }
 
-void hcsr04_init(void){
-	int ret;
+struct file_operations sonic_fops = {
+	.open = sonic_open,
+	.release = sonic_release,
+	.read = sonic_read,	
+};
 
-	printk("Init Module\n");
-	isEntered = 0;
+static dev_t dev_num;
+static struct cdev *cd_cdev;
 
-	gpio_request_one(HCSR04_TRIGGER, GPIOF_OUT_INIT_LOW, "trigger");
-	gpio_request_one(HCSR04_ECHO, GPIOF_IN, "echo");
+static int __init simple_sensor_init(void){
+    int ret;
 
-	init_timer(&my_timer);
-	my_timer.function = my_timer_func;
-	my_timer.expires = jiffies + (1*HZ);
+    printk("Init Module\n");
 
-	irq_num = gpio_to_irq(HCSR04_ECHO);
-	ret = request_irq(irq_num, hcsr04_isr,IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "sonic_sensor", NULL);
+    alloc_chrdev_region(&dev_num, 0, 1, DEVNAME);
+    cd_cdev = cdev_alloc();
+    cdev_init(cd_cdev, &sonic_fops);
+    cdev_add(cd_cdev, dev_num, 1);
 
-	if(ret){
-		printk("Unable to request IRQ: %d\n", ret);
-		free_irq(irq_num, NULL);
-	} else {
-		disable_irq(irq_num);
-	}
+    gpio_request_one(TRIGGER, GPIOF_OUT_INIT_LOW, "trigger");
+    gpio_request_one(ECHO, GPIOF_IN, "echo");
 
-	enable_irq(irq_num);
-	add_timer(&my_timer);
+    init_timer(&my_timer);
+
+    setup_timer(&my_timer, my_timer_callback, 0);
+
+    irq_num = gpio_to_irq(ECHO);
+    ret = request_irq(irq_num, sonic_isr,IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, "sonic_sensor", NULL);
+
+    if(ret){
+        printk( "Unable to request IRQ: %d\n", ret);
+        free_irq(irq_num, NULL);
+    } else {
+        disable_irq(irq_num);
+    }
+    enable_irq(irq_num);
+
+    mod_timer(&my_timer, jiffies + msecs_to_jiffies(20));
+
+    return 0;
 }
 
-void hcsr04_exit(void){
-	free_irq(irq_num, NULL);
-	del_timer(&my_timer);
-	gpio_free(HCSR04_TRIGGER);
-	gpio_free(HCSR04_ECHO);
+static void __exit simple_sensor_exit(void){
+    printk("Exit Module\n");
+    cdev_del(cd_cdev);
+    unregister_chrdev_region(dev_num, 1);
+    
+    free_irq(irq_num, NULL);
+    del_timer(&my_timer);
+    gpio_free(TRIGGER);
+    gpio_free(ECHO);
 }
+
+module_init(simple_sensor_init);
+module_exit(simple_sensor_exit);

@@ -10,133 +10,128 @@
 #include <linux/cdev.h>
 
 #include <linux/gpio.h>
-#include <linux/kthread.h>
+#include <linux/ktime.h>
 #include <linux/timer.h>
 
 #include "config.h"
-#include "common.h"
-#include "motor.h"
+#include "fs_main.h"
+
+#define DEV_NAME "motor1_dev"
 
 MODULE_LICENSE("GPL");
 
-extern int dist;
-struct task_struct *conveyor_task = NULL;
-static struct timer_list conveyor_timer;
-extern long get_distance(void);
+static int run_motor;
+static struct hrtimer hrt;
 
-static void conveyor_timer_func(unsigned long data){
-	conveyor_timer.expires = jiffies + (0.1*HZ);
-	run_conveyor_motor();
-	add_timer(&conveyor_timer);
-}
-
-static int run_conveyor_motor(void){
-	int r,degree,i;
+static void run_conveyor_motor(void){
+	printk("run conveyor motor %ld\n",run_motor);
+	int r,degree;
 	r=0;
-	degree = 15;
+	degree = 1;
 	degree = degree*512/45;
-	printk("run conveyor\n");
-	
-	for(i=0; i<2; ++i){
-		printk("motor cycle %d\n", i);	
-		printk("dist :%ld", dist);
-		printk("get_distance :%ld", get_distance());
-		while(r<degree){
-			if(dist<5) break;
-			gpio_set_value(MOTOR_PIN1, steps[r%8][0]);
-			gpio_set_value(MOTOR_PIN2, steps[r%8][1]);
-			gpio_set_value(MOTOR_PIN3, steps[r%8][2]);
-			gpio_set_value(MOTOR_PIN4, steps[r%8][3]);
-			udelay(1200);
-			r++;
+
+	while(r<degree){
+		if(!run_motor){
+			break;
 		}
-		r=0;
+
+		gpio_set_value(MOTOR_PIN1, steps[r%8][0]);
+		gpio_set_value(MOTOR_PIN2, steps[r%8][1]);
+		gpio_set_value(MOTOR_PIN3, steps[r%8][2]);
+		gpio_set_value(MOTOR_PIN4, steps[r%8][3]);
+		udelay(1200);
+		r++;
 	}
+
 }
 
-static int motor_init(void){
-	gpio_request_one(MOTOR_PIN1, GPIOF_OUT_INIT_LOW, "motor_pin1");
-	gpio_request_one(MOTOR_PIN2, GPIOF_OUT_INIT_LOW, "motor_pin2");
-	gpio_request_one(MOTOR_PIN3, GPIOF_OUT_INIT_LOW, "motor_pin3");
-	gpio_request_one(MOTOR_PIN4, GPIOF_OUT_INIT_LOW, "motor_pin4");
-	
-//	run_conveyor_motor();
-	
-	init_timer(&conveyor_timer);
-	conveyor_timer.function = conveyor_timer_func;
-	conveyor_timer.data = 1L;
-	conveyor_timer.expires = jiffies+(0.1*HZ);
-	
-	add_timer(&conveyor_timer);
-	
-/*
-	conveyor_task = kthread_create(run_conveyor_motor, NULL, "conveyor_thread");
-	if(IS_ERR(conveyor_task)){
-		conveyor_task = NULL;
-		printk("Conveyor_motor thread ERROR\n");
-	}
-	
-	wake_up_process(conveyor_task);
-*/
-}
 
-static void motor_exit(void){
-	gpio_set_value(MOTOR_PIN1, 0);
-	gpio_set_value(MOTOR_PIN2, 0);
-	gpio_set_value(MOTOR_PIN3, 0);
-	gpio_set_value(MOTOR_PIN4, 0);
-	
-	gpio_free(MOTOR_PIN1);
-	gpio_free(MOTOR_PIN2);
-	gpio_free(MOTOR_PIN3);
-	gpio_free(MOTOR_PIN4);
-
-	if(conveyor_task){
-		kthread_stop(conveyor_task);
-		printk("Conveyor motor thread STOP\n");
-	}
+static enum hrtimer_restart hrt_function(struct hrtimer *timer){
+	run_conveyor_motor();
+	hrtimer_forward_now(&hrt, ns_to_ktime(SLEEP_SPEED));
+	return HRTIMER_RESTART;
 }
 
 
 static int fs_open(struct inode *inode, struct file *file)
 {
-	printk("open\n");
+	printk("main_open\n");
+	hrtimer_start(&hrt, ns_to_ktime(SLEEP_SPEED), HRTIMER_MODE_REL);
+
 	return 0;
 }
 
 static int fs_release(struct inode *inode, struct file *file)
 {
-	printk("release\n");
+	printk("main_release\n");
+	hrtimer_cancel(&hrt);
 	return 0;
 }
 
-static long fs_ioctl(struct file *file, unsigned int cmd, unsigned long arg){
+struct conveyor_buf{
+	int run_motor;
+};
+
+static int fs_write(struct file *file, const char *buf, size_t len, loff_t *lof){
+	struct conveyor_buf cb;
+	copy_from_user(&cb, buf, len);
+	
+	run_motor = cb.run_motor;
+	printk("write %d",run_motor);
+	return 0;
 }
 
 static struct file_operations fs_fops = {
 	.open = fs_open,
 	.release = fs_release,
-	.unlocked_ioctl = fs_ioctl,
+	.write = fs_write,
 };
 
 static dev_t dev_num;
 static struct cdev *cd_cdev;
 
 static int __init fs_init(void){
-	printk("init Module\n");
-	alloc_chrdev_region(&dev_num, 0, 1, "fruit_sorter");
+	int ret;
+
+	printk("init fs_main Module\n");
+	run_motor = 1;
+	alloc_chrdev_region(&dev_num, 0, 1, DEV_NAME);
 	cd_cdev = cdev_alloc();
 	cdev_init(cd_cdev, &fs_fops);
-	cdev_add(cd_cdev, dev_num, 1);
-//	tcs3200_init();
-	hcsr04_init();
-	motor_init();
+	ret = cdev_add(cd_cdev, dev_num, 1);
+
+	if(ret < 0){
+		printk("fail to insert drive\n");
+		return -1;
+	}
+
+	gpio_request_one(MOTOR_PIN1, GPIOF_OUT_INIT_LOW, "motor_pin1");
+	gpio_request_one(MOTOR_PIN2, GPIOF_OUT_INIT_LOW, "motor_pin2");
+	gpio_request_one(MOTOR_PIN3, GPIOF_OUT_INIT_LOW, "motor_pin3");
+	gpio_request_one(MOTOR_PIN4, GPIOF_OUT_INIT_LOW, "motor_pin4");
+	
+	hrtimer_init(&hrt, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	hrt.function = &hrt_function;
+
+	//hrtimer_start(&hrt, ns_to_ktime(SLEEP_SPEED), HRTIMER_MODE_REL);
+
+	return 0;
 }
 
 static void __exit fs_exit(void){
-	printk("exit Module\n");
-	hcsr04_exit();
-	motor_exit();
+	printk("exit fs_main Module\n");
+
+	gpio_set_value(MOTOR_PIN1, 0);
+	gpio_set_value(MOTOR_PIN2, 0);
+	gpio_set_value(MOTOR_PIN3, 0);
+	gpio_set_value(MOTOR_PIN4, 0);
+
+	gpio_free(MOTOR_PIN1);
+	gpio_free(MOTOR_PIN2);
+	gpio_free(MOTOR_PIN3);
+	gpio_free(MOTOR_PIN4);
+	//hrtimer_cancel(&hrt);
+	
 	cdev_del(cd_cdev);
 	unregister_chrdev_region(dev_num, 1);
 }
